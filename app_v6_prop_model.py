@@ -15,7 +15,7 @@ page = st.sidebar.radio(
     ["🏈 Player Prop Model", "📈 NFL Game Predictor"]
 )
 st.sidebar.markdown("---")
-st.sidebar.caption("Biosense NFL Data Model – v8.4 (Prop + Predictor Combined)")
+st.sidebar.caption("NFL Data Model – v8.5 (Prop + Predictor Combined)")
 
 # ======================================================
 # 🏈 TAB 1: FULL PLAYER PROP MODEL (v7.7)
@@ -92,9 +92,7 @@ if page == "🏈 Player Prop Model":
 
     st.header("📊 Results")
 
-    # -------------------------------
-    # Full Player Prop Logic
-    # -------------------------------
+    # === All Helper Functions (v7.7 logic) ===
     def find_player_in(df: pd.DataFrame, player_name: str):
         if "player" not in df.columns:
             return None
@@ -149,7 +147,7 @@ if page == "🏈 Player Prop Model":
                 return cols[i]
         return None
 
-    # === Compute Results ===
+    # === Compute Props ===
     for prop in selected_props:
         # --- ANYTIME TD (Rushing + Receiving Combined) ---
         if prop == "anytime_td":
@@ -187,20 +185,7 @@ if page == "🏈 Player Prop Model":
             adj_factor = opp_td_pg / league_td_pg if league_td_pg > 0 else 1.0
             adj_td_rate = player_td_pg * adj_factor
             prob_anytime = min(adj_td_rate, 1.0)
-            st.write(f"**Total TDs (season):** {total_tds:.1f}")
-            st.write(f"**Games Played:** {total_games:.0f}")
-            st.write(f"**Player TDs/Game:** {player_td_pg:.2f}")
-            st.write(f"**Defense TDs/Game (League Avg):** {league_td_pg:.2f}")
-            st.write(f"**Opponent TDs/Game (Adj):** {opp_td_pg:.2f}")
-            st.write(f"**Adjusted Player TD Rate:** {adj_td_rate:.2f}")
             st.write(f"**Estimated Anytime TD Probability:** {prob_anytime*100:.1f}%")
-            bar_df = pd.DataFrame({
-                "Category": ["Player TD Rate", "Adj. vs Opponent"],
-                "TDs/Game": [player_td_pg, adj_td_rate],
-            })
-            fig_td = px.bar(bar_df, x="Category", y="TDs/Game",
-                            title=f"{player_name} – Anytime TD vs {opponent_team}")
-            st.plotly_chart(fig_td, use_container_width=True)
             continue
 
         # --- OTHER PROPS ---
@@ -254,7 +239,6 @@ if page == "🏈 Player Prop Model":
         prob_over = float(np.clip(prob_over, 0.001, 0.999))
         prob_under = float(np.clip(prob_under, 0.001, 0.999))
         st.subheader(prop.replace("_", " ").title())
-        st.write(f"**Player (season):** {season_val:.2f} over {games_played:.0f} games → **{player_pg:.2f} per game**")
         st.write(f"**Adjusted prediction (this game):** {predicted_pg:.2f}")
         st.write(f"**Line:** {line_val}")
         st.write(f"**Probability of OVER:** {prob_over*100:.1f}%")
@@ -314,4 +298,27 @@ elif page == "📈 NFL Game Predictor":
         team_avg_scored, team_avg_allowed = avg_scoring(scores_df, selected_team)
         opp_avg_scored, opp_avg_allowed = avg_scoring(scores_df, opponent)
 
-        raw_team_pts = (
+        raw_team_pts = (team_avg_scored + opp_avg_allowed) / 2
+        raw_opp_pts = (opp_avg_scored + team_avg_allowed) / 2
+
+        # Calibrate toward league average ~22.3 pts/team
+        league_avg_pts = scores_df[["home_score", "away_score"]].stack().mean()
+        cal_factor = 22.3 / league_avg_pts if not np.isnan(league_avg_pts) and league_avg_pts > 0 else 1.0
+        raw_team_pts *= cal_factor
+        raw_opp_pts *= cal_factor
+
+        total_pred = raw_team_pts + raw_opp_pts
+        margin = raw_team_pts - raw_opp_pts
+
+        total_diff = total_pred - over_under
+        spread_diff = margin - (-spread)
+
+        st.markdown(f"""
+        ### 🧮 Vegas-Calibrated Projection
+        **Predicted Score:**  
+        {selected_team}: **{raw_team_pts:.1f}**  
+        {opponent}: **{raw_opp_pts:.1f}**
+
+        **Predicted Total:** {total_pred:.1f}  
+        **Vegas O/U:** {over_under:.1f}  
+        **→ Lean:** {"Over
