@@ -144,7 +144,6 @@ if page == "🏈 Player Prop Model":
                 return cols[i]
         return None
 
-    # --- Prop Logic (same as v7.7) ---
     for prop in selected_props:
         if prop == "anytime_td":
             st.subheader("🔥 Anytime TD (Rushing + Receiving + Defense Adjusted)")
@@ -316,15 +315,15 @@ elif page == "📈 NFL Game Predictor":
         total_diff = total_pred - over_under
         spread_diff = margin - (-spread)
 
-        st.markdown(
-            f"""
-            ### 🧮 Vegas-Calibrated Projection
-            **Predicted Score:**  
-            {selected_team}: **{raw_team_pts:.1f}**  
-            {opponent}: **{raw_opp_pts:.1f}**
+        st.markdown(f"""
+        ### 🧮 Vegas-Calibrated Projection
+        **Predicted Score:**  
+        {selected_team}: **{raw_team_pts:.1f}**  
+        {opponent}: **{raw_opp_pts:.1f}**
 
-            **Predicted Total:** {total_pred:.1f}  
-            **Vegas O/U:** {over_under:.1f}  
-            **→ Lean:** {"Over" if total_diff > 0 else "Under"} ({abs(total_diff):.1f} pts)
+        **Predicted Total:** {total_pred:.1f}  
+        **Vegas O/U:** {over_under:.1f}  
+        **→ Lean:** {"Over" if total_diff > 0 else "Under"} ({abs(total_diff):.1f} pts)
 
-            **
+        **Spread Line:** {spread:+.1f}  
+        **→
