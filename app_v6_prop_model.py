@@ -15,7 +15,7 @@ page = st.sidebar.radio(
     ["🏈 Player Prop Model", "📈 NFL Game Predictor"]
 )
 st.sidebar.markdown("---")
-st.sidebar.caption("Biosense NFL Data Model – Combined v8.7")
+st.sidebar.caption("NFL Data Model – Combined v8.7")
 
 # ======================================================
 # 🏈 TAB 1: PLAYER PROP MODEL (v7.7)
