@@ -315,7 +315,7 @@ elif page == "📈 NFL Game Predictor":
         total_diff = total_pred - over_under
         spread_diff = margin - (-spread)
 
-              st.markdown(f"""
+        st.markdown(f"""
         ### 🧮 Vegas-Calibrated Projection
         **Predicted Score:**  
         {selected_team}: **{raw_team_pts:.1f}**  
