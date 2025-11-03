@@ -315,7 +315,7 @@ elif page == "📈 NFL Game Predictor":
         total_diff = total_pred - over_under
         spread_diff = margin - (-spread)
 
-        st.markdown(f"""
+              st.markdown(f"""
         ### 🧮 Vegas-Calibrated Projection
         **Predicted Score:**  
         {selected_team}: **{raw_team_pts:.1f}**  
@@ -326,4 +326,20 @@ elif page == "📈 NFL Game Predictor":
         **→ Lean:** {"Over" if total_diff > 0 else "Under"} ({abs(total_diff):.1f} pts)
 
         **Spread Line:** {spread:+.1f}  
-        **→
+        **→ Lean:** {selected_team if spread_diff > 0 else opponent} to cover ({abs(spread_diff):.1f} pts)
+        """)
+
+        # --- Charts ---
+        fig_total = px.bar(
+            x=["Predicted Total", "Vegas Line"],
+            y=[total_pred, over_under],
+            title="Predicted Total vs Vegas Line"
+        )
+        st.plotly_chart(fig_total, use_container_width=True)
+
+        fig_margin = px.bar(
+            x=["Predicted Margin", "Vegas Spread"],
+            y=[margin, -spread],
+            title="Predicted Margin vs Vegas Spread"
+        )
+        st.plotly_chart(fig_margin, use_container_width=True)
