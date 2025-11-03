@@ -1,189 +1,258 @@
-import streamlit as st
-import pandas as pd
+# ================================
+# NFL GAME PREDICTOR (Calibrated)
+# ================================
+# Requirements:
+# - scores_csv_url in SHEETS like you set earlier (the one with these headers)
+#   week,date,time,away_team,away_abbr,home_team,home_abbr,away_score,home_score,
+#   situation,status,score_text,total_points,game_id,over_under,odds,favored_team,
+#   spread,fav_covered,box_score_home,box_score_away,home_display_name,away_display_name,
+#   game_winner,game_loser,over_hit,under_hit,broadcast,home_off_yards,away_off_yards
+#
+# This tab reads the CSV directly (no Google auth), computes a baseline,
+# then calibrates to Vegas lines from prior weeks to match market levels.
+
 import numpy as np
-from scipy.stats import norm
+import pandas as pd
 import plotly.express as px
-import re
+from scipy.stats import norm
 
-st.set_page_config(page_title="NFL Prop & Game Model", layout="wide")
-
-# -------------------------------
-# Sidebar Navigation
-# -------------------------------
-page = st.sidebar.radio(
-    "Select Page:",
-    ["🏈 Player Prop Model", "📈 NFL Game Predictor"]
+st.markdown("## 🧮 NFL Game Predictor (Calibrated to Market)")
+scores_csv_url = st.text_input(
+    "Scores CSV URL (export=csv)",
+    "https://docs.google.com/spreadsheets/d/1KrTQbR5uqlBn2v2Onpjo6qHFnLlrqIQBzE52KAhMYcY/export?format=csv"
 )
-st.sidebar.markdown("---")
-st.sidebar.caption("Biosense NFL Data Model – v8.0")
 
-# ======================================================
-# 🏈 TAB 1: PLAYER PROP MODEL  (Your working version)
-# ======================================================
-if page == "🏈 Player Prop Model":
-    SHEETS = {
-        "total_offense": "https://docs.google.com/spreadsheets/d/1DFZRqOiMXbIoEeLaNaWh-4srxeWaXscqJxIAHt9yq48/export?format=csv",
-        "total_passing": "https://docs.google.com/spreadsheets/d/1QclB5ajymBsCC09j8s4Gie_bxj4ebJwEw4kihG6uCng/export?format=csv",
-        "total_rushing": "https://docs.google.com/spreadsheets/d/14NgUntobNrL1AZg3U85yZInArFkHyf9mi1csVFodu90/export?format=csv",
-        "total_scoring": "https://docs.google.com/spreadsheets/d/1SJ_Y1ljU44lOjbNHuXGyKGiF3mgQxjAjX8H3j-CCqSw/export?format=csv",
-        "player_receiving": "https://docs.google.com/spreadsheets/d/1Gwb2A-a4ge7UKHnC7wUpJltgioTuCQNuwOiC5ecZReM/export?format=csv",
-        "player_rushing": "https://docs.google.com/spreadsheets/d/1c0xpi_wZSf8VhkSPzzchxvhzAQHK0tFetakdRqb3e6k/export?format=csv",
-        "player_passing": "https://docs.google.com/spreadsheets/d/1I9YNSQMylW_waJs910q4S6SM8CZE--hsyNElrJeRfvk/export?format=csv",
-        "def_rb": "https://docs.google.com/spreadsheets/d/1xTP8tMnEVybu9vYuN4i6IIrI71q1j60BuqVC40fjNeY/export?format=csv",
-        "def_qb": "https://docs.google.com/spreadsheets/d/1SEwUdExz7Px61FpRNQX3bUsxVFtK97JzuQhTddVa660/export?format=csv",
-        "def_wr": "https://docs.google.com/spreadsheets/d/14klXrrHHCLlXhW6-F-9eJIz3dkp_ROXVSeehlM8TYAo/export?format=csv",
-        "def_te": "https://docs.google.com/spreadsheets/d/1yMpgtx1ObYLDVufTMR5Se3KrMi1rG6UzMzLcoptwhi4/export?format=csv",
-    }
-
-    def normalize_header(name: str) -> str:
-        if not isinstance(name, str):
-            name = str(name)
-        name = name.strip().replace(" ", "_").lower()
-        name = re.sub(r"[^0-9a-z_]", "", name)
-        return name
-
-    def load_and_clean(url: str) -> pd.DataFrame:
+@st.cache_data(show_spinner=False)
+def load_scores(url: str) -> pd.DataFrame:
+    try:
         df = pd.read_csv(url)
-        df.columns = [normalize_header(c) for c in df.columns]
-        if "team" in df.columns:
-            df["team"] = df["team"].astype(str).str.strip()
-        elif "teams" in df.columns:
-            df["team"] = df["teams"].astype(str).str.strip()
-        return df
+    except Exception:
+        return pd.DataFrame()
+    # normalize headers
+    def norm(s): 
+        s = str(s).strip().lower().replace(" ", "_")
+        return "".join(ch for ch in s if ch.isalnum() or ch == "_")
+    df.columns = [norm(c) for c in df.columns]
+    # best-effort types
+    for c in ["week","away_score","home_score","total_points","over_under","spread","home_off_yards","away_off_yards"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    # teams to str
+    for c in ["home_team","away_team","home_abbr","away_abbr"]:
+        if c in df.columns:
+            df[c] = df[c].astype(str)
+    return df
 
-    @st.cache_data(show_spinner=False)
-    def load_all():
-        return {name: load_and_clean(url) for name, url in SHEETS.items()}
+scores_df = load_scores(scores_csv_url)
 
-    data = load_all()
-    p_rec, p_rush, p_pass = data["player_receiving"], data["player_rushing"], data["player_passing"]
-    d_rb, d_qb, d_wr, d_te = data["def_rb"], data["def_qb"], data["def_wr"], data["def_te"]
+if scores_df.empty:
+    st.warning("Couldn't load the scores sheet. Double-check the URL (must be a CSV export).")
+    st.stop()
 
-    st.title("🏈 NFL Player Prop Model (v7.7)")
+# --- UI: pick week and team
+weeks = sorted([int(w) for w in scores_df["week"].dropna().unique() if pd.notna(w)])
+sel_week = st.selectbox("Select Week", options=weeks, index=(len(weeks)-1 if weeks else 0))
 
-    player_list = sorted(set(
-        list(p_rec["player"].dropna().unique()) +
-        list(p_rush["player"].dropna().unique()) +
-        list(p_pass["player"].dropna().unique())
-    ))
-    team_list = sorted(set(
-        list(d_rb.get("team", pd.Series()).dropna().unique()) +
-        list(d_wr.get("team", pd.Series()).dropna().unique()) +
-        list(d_te.get("team", pd.Series()).dropna().unique()) +
-        list(d_qb.get("team", pd.Series()).dropna().unique())
-    ))
+# Collect team universe from either abbr or team fields
+team_pool = set()
+for col in ["home_abbr","away_abbr","home_team","away_team"]:
+    if col in scores_df.columns:
+        team_pool.update(scores_df[col].dropna().astype(str).unique().tolist())
+teams = sorted([t for t in team_pool if t and t.lower() != "nan"])
 
-    player_name = st.selectbox("Select Player:", [""] + player_list)
-    opponent_team = st.selectbox("Select Opponent Team:", [""] + team_list)
+sel_team = st.selectbox("Select Your Team", options=[""] + teams, index=0, help="Pick the team you want to project")
+if not sel_team:
+    st.info("Pick a team to continue.")
+    st.stop()
 
-    prop_choices = [
-        "passing_yards", "rushing_yards", "receiving_yards",
-        "receptions", "targets", "carries", "anytime_td"
-    ]
-    selected_props = st.multiselect("Select props:", prop_choices, default=["receiving_yards"])
+# Enter live market lines you want to compare against
+col1, col2 = st.columns(2)
+with col1:
+    user_spread = st.number_input("Enter spread (negative = your team favored)", value= -2.5, step=0.5, format="%.2f")
+with col2:
+    user_total  = st.number_input("Enter total (O/U)", value= 44.5, step=0.5, format="%.1f")
 
-    lines = {}
-    for prop in selected_props:
-        if prop != "anytime_td":
-            lines[prop] = st.number_input(f"Sportsbook line for {prop}", value=50.0, key=prop)
+# --- Helper: build per-team seasonal averages up to (but not including) sel_week
+def season_team_avgs(df: pd.DataFrame, week_cutoff: int):
+    hist = df[(df["week"].notna()) & (df["week"] < week_cutoff)].copy()
+    # rows with valid scores only
+    hist = hist[pd.notna(hist["home_score"]) & pd.notna(hist["away_score"])]
 
-    if not player_name or not opponent_team or not selected_props:
-        st.stop()
+    # long form
+    home = hist[["home_team","home_abbr","home_score","away_score"]].copy()
+    home["team"] = home["home_abbr"].where(home["home_abbr"].notna(), home["home_team"])
+    home["pts_for"]  = home["home_score"]
+    home["pts_again"] = home["away_score"]
 
-    st.header("📊 Results")
+    away = hist[["away_team","away_abbr","home_score","away_score"]].copy()
+    away["team"] = away["away_abbr"].where(away["away_abbr"].notna(), away["away_team"])
+    away["pts_for"]  = away["away_score"]
+    away["pts_again"] = away["home_score"]
 
-    # === Your working prop logic remains unchanged ===
-    # (Full prop model code would remain here from your v7.7 version)
-    st.success("✅ Player Prop Model working correctly.")
+    long = pd.concat([home[["team","pts_for","pts_again"]],
+                      away[["team","pts_for","pts_again"]]], ignore_index=True)
 
-# ======================================================
-# 📈 TAB 2: NFL GAME PREDICTOR (with point-based outputs)
-# ======================================================
-elif page == "📈 NFL Game Predictor":
-    st.title("📈 NFL Game Predictor")
+    grp = long.groupby("team", dropna=True).agg(
+        games=("pts_for","count"),
+        avg_scored=("pts_for","mean"),
+        avg_allowed=("pts_again","mean"),
+    ).reset_index()
 
-    SCORE_URL = "https://docs.google.com/spreadsheets/d/1KrTQbR5uqlBn2v2Onpjo6qHFnLlrqIQBzE52KAhMYcY/export?format=csv"
+    # fallback for teams with no history yet
+    league_avg_scored  = long["pts_for"].mean() if not long.empty else 22.0
+    league_avg_allowed = long["pts_again"].mean() if not long.empty else 22.0
 
-    @st.cache_data(show_spinner=False)
-    def load_scores():
-        df = pd.read_csv(SCORE_URL)
-        df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
-        return df
+    grp["avg_scored"]  = grp["avg_scored"].fillna(league_avg_scored)
+    grp["avg_allowed"] = grp["avg_allowed"].fillna(league_avg_allowed)
 
-    scores_df = load_scores()
+    return grp, league_avg_scored, league_avg_allowed
 
-    if scores_df is not None and not scores_df.empty:
-        week_list = sorted(scores_df["week"].dropna().unique())
-        team_list = sorted(set(scores_df["home_team"].dropna().unique()) | set(scores_df["away_team"].dropna().unique()))
+team_avgs, league_pts_for, league_pts_again = season_team_avgs(scores_df, sel_week)
 
-        st.subheader("Select Game Details")
-        selected_week = st.selectbox("Select NFL Week:", week_list)
-        selected_team = st.selectbox("Select Your Team:", team_list)
+# --- Find opponent this week (from schedule)
+wk = scores_df[scores_df["week"] == sel_week].copy()
 
-        game = scores_df[
-            ((scores_df["home_team"] == selected_team) | (scores_df["away_team"] == selected_team))
-            & (scores_df["week"] == selected_week)
-        ]
+def as_team_str(x):
+    return str(x).strip()
 
-        if game.empty:
-            st.warning("No game data found for that team/week.")
-        else:
-            g = game.iloc[0]
-            opponent = g["away_team"] if g["home_team"] == selected_team else g["home_team"]
+wk["home"] = wk["home_abbr"].fillna(wk["home_team"]).apply(as_team_str)
+wk["away"] = wk["away_abbr"].fillna(wk["away_team"]).apply(as_team_str)
 
-            st.write(f"**Matchup:** {selected_team} vs {opponent}")
-            over_under = st.number_input("Enter Over/Under line:", value=float(g.get("over_under", 45.0)))
-            spread = st.number_input("Enter Spread (negative = favorite):", value=float(g.get("spread", 0.0)))
+mask_is_home = wk["home"].str.lower() == sel_team.lower()
+mask_is_away = wk["away"].str.lower() == sel_team.lower()
 
-            # Simple baseline prediction: average points scored and allowed
-            team_scored = scores_df.groupby("home_team")["home_score"].mean().add(
-                scores_df.groupby("away_team")["away_score"].mean(), fill_value=0
-            ).div(2)
-            team_allowed = scores_df.groupby("home_team")["away_score"].mean().add(
-                scores_df.groupby("away_team")["home_score"].mean(), fill_value=0
-            ).div(2)
+if not (mask_is_home.any() or mask_is_away.any()):
+    st.warning(f"I couldn't find **{sel_team}** in Week {sel_week} of your sheet.")
+    st.stop()
 
-            team_avg_scored = team_scored.get(selected_team, 21.0)
-            team_avg_allowed = team_allowed.get(selected_team, 21.0)
-            opp_avg_scored = team_scored.get(opponent, 21.0)
-            opp_avg_allowed = team_allowed.get(opponent, 21.0)
+row = wk[mask_is_home | mask_is_away].iloc[0]
+is_home = bool(mask_is_home.any())
+opp    = row["away"] if is_home else row["home"]
 
-            predicted_team_score = (team_avg_scored + opp_avg_allowed) / 2
-            predicted_opp_score = (opp_avg_scored + team_avg_allowed) / 2
-            predicted_total = predicted_team_score + predicted_opp_score
+st.markdown(f"**Matchup (Week {sel_week}):** {sel_team} {'vs' if is_home else '@'} {opp}")
 
-            # Compare to lines
-            total_diff = predicted_total - over_under
-            margin = predicted_team_score - predicted_opp_score
-            spread_diff = margin - (-spread)
+# --- Baseline (un-calibrated) projection
+def get_avg(team_name: str, col: str, default: float):
+    s = team_avgs.loc[team_avgs["team"].astype(str).str.lower()==team_name.lower(), col]
+    return float(s.iloc[0]) if not s.empty and pd.notna(s.iloc[0]) else default
 
-            st.markdown(f"""
-            ### 🧮 Baseline Projection
-            **Predicted Score:**  
-            {selected_team}: **{predicted_team_score:.1f}**  
-            {opponent}: **{predicted_opp_score:.1f}**
+team_avg_scored  = get_avg(sel_team, "avg_scored",  league_pts_for)
+team_avg_allowed = get_avg(sel_team, "avg_allowed", league_pts_again)
+opp_avg_scored   = get_avg(opp,      "avg_scored",  league_pts_for)
+opp_avg_allowed  = get_avg(opp,      "avg_allowed", league_pts_again)
 
-            **Predicted Total:** {predicted_total:.1f}  
-            **O/U Line:** {over_under:.1f}  
-            **→ Lean:** {"Over" if total_diff > 0 else "Under"} ({abs(total_diff):.1f} pts)
+# Baseline (your earlier logic): simple average of offense vs defense
+raw_team_pts = (team_avg_scored + opp_avg_allowed) / 2.0
+raw_opp_pts  = (opp_avg_scored  + team_avg_allowed) / 2.0
+raw_total    = raw_team_pts + raw_opp_pts
+raw_spread   = raw_team_pts - raw_opp_pts  # (your team) - (opp)
 
-            **Spread Line:** {spread:+.1f}  
-            **→ Lean:** {selected_team if spread_diff > 0 else opponent} to cover ({abs(spread_diff):.1f} pts)
-            """)
+# --- Fit calibration using past games (<= sel_week-1)
+hist = scores_df[(scores_df["week"].notna()) & (scores_df["week"] < sel_week)].copy()
+hist = hist[pd.notna(hist["home_score"]) & pd.notna(hist["away_score"])]
 
-            # Charts
-            fig_total = px.bar(
-                x=["Predicted Total", "Over/Under Line"],
-                y=[predicted_total, over_under],
-                title="Predicted Total vs Line"
-            )
-            st.plotly_chart(fig_total, use_container_width=True)
+def compute_raw_pair(hrow):
+    # compute same raw model for any game row
+    hteam = as_team_str(hrow["home_abbr"]) if pd.notna(hrow.get("home_abbr", None)) else as_team_str(hrow["home_team"])
+    ateam = as_team_str(hrow["away_abbr"]) if pd.notna(hrow.get("away_abbr", None)) else as_team_str(hrow["away_team"])
+    h_scored  = get_avg(hteam, "avg_scored",  league_pts_for)
+    h_allowed = get_avg(hteam, "avg_allowed", league_pts_again)
+    a_scored  = get_avg(ateam, "avg_scored",  league_pts_for)
+    a_allowed = get_avg(ateam, "avg_allowed", league_pts_again)
+    h_raw = (h_scored + a_allowed) / 2.0
+    a_raw = (a_scored + h_allowed) / 2.0
+    return h_raw + a_raw, h_raw - a_raw
 
-            fig_margin = px.bar(
-                x=["Predicted Margin", "Spread Line"],
-                y=[margin, -spread],
-                title="Predicted Margin vs Spread"
-            )
-            st.plotly_chart(fig_margin, use_container_width=True)
-    else:
-        st.error("Could not load NFL game data.")
+hist["actual_total"] = hist["home_score"] + hist["away_score"]
+raw_pairs = hist.apply(lambda r: compute_raw_pair(r), axis=1, result_type="expand")
+hist["raw_total"]  = raw_pairs[0]
+hist["raw_spread"] = raw_pairs[1]
+
+# We’ll regress actual_total ~ raw_total and actual_spread ~ raw_spread
+def fit_calibration(x, y):
+    x = pd.to_numeric(x, errors="coerce")
+    y = pd.to_numeric(y, errors="coerce")
+    mask = x.notna() & y.notna()
+    if mask.sum() < 15:  # not enough games -> fallback
+        return 0.0, 1.10, 7.0  # intercept, slope, sigma fallback
+    # linear fit y = a + b*x
+    a, b = np.polyfit(x[mask], y[mask], 1)
+    # std of residuals for uncertainty
+    resid = y[mask] - (a + b*x[mask])
+    sigma = float(np.sqrt(np.mean(resid**2)))
+    return float(a), float(b), sigma
+
+a_tot, b_tot, sigma_tot = fit_calibration(hist["raw_total"], hist["actual_total"])
+
+# For spreads we need actual spread (home - away)
+hist["actual_spread"] = hist["home_score"] - hist["away_score"]
+a_spr, b_spr, sigma_spr = fit_calibration(hist["raw_spread"], hist["actual_spread"])
+
+# --- Apply calibration
+cal_total  = a_tot + b_tot * raw_total
+cal_spread = a_spr + b_spr * raw_spread
+
+# Split calibrated total using raw ratio (to keep offense/def mix)
+raw_team_share = raw_team_pts / max(raw_total, 1e-6)
+raw_opp_share  = 1.0 - raw_team_share
+cal_team_pts   = cal_total * raw_team_share
+cal_opp_pts    = cal_total * raw_opp_share
+
+# Round to plausible football scores for display
+disp_team = float(np.round(cal_team_pts, 1))
+disp_opp  = float(np.round(cal_opp_pts, 1))
+disp_total = float(np.round(cal_total, 1))
+disp_spread = float(np.round(cal_spread, 1))
+
+st.markdown("### 🔧 Calibrated Projection (closer to market)")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric(f"{sel_team} points", disp_team)
+c2.metric(f"{opp} points", disp_opp)
+c3.metric("Projected Total", disp_total)
+c4.metric(f"Projected Spread ( {sel_team} - {opp} )", disp_spread)
+
+# --- Compare to your lines (edge + rough probabilities)
+def prob_over_under(line_total, pred_total, sigma):
+    if sigma <= 0: sigma = 6.5  # safety
+    z = (line_total - pred_total) / sigma
+    p_over = 1 - norm.cdf(z)
+    return float(np.clip(p_over, 0.01, 0.99)), float(1 - np.clip(p_over, 0.01, 0.99))
+
+def prob_cover(line_spread, pred_spread, sigma):
+    if sigma <= 0: sigma = 5.5
+    # P( pred_spread > line_spread )
+    z = (line_spread - pred_spread) / sigma
+    p_cover = 1 - norm.cdf(z)
+    return float(np.clip(p_cover, 0.01, 0.99))
+
+p_over, p_under = prob_over_under(user_total, cal_total, sigma_tot)
+p_cover = prob_cover(user_spread, cal_spread, sigma_spr)
+
+edge_total = float(np.round(cal_total - user_total, 2))
+edge_spread = float(np.round(cal_spread - user_spread, 2))
+
+st.markdown("### 📈 Edges vs Your Line")
+e1, e2 = st.columns(2)
+with e1:
+    st.write(f"**Total edge (model − line):** {edge_total:+.2f}")
+    st.write(f"**Prob OVER {user_total:.1f}:** {p_over*100:.1f}%  |  **Prob UNDER:** {p_under*100:.1f}%")
+with e2:
+    st.write(f"**Spread edge (model − line):** {edge_spread:+.2f}")
+    lab = f"{sel_team} {'to cover' if user_spread<0 else 'to beat the +spread'}"
+    st.write(f"**Prob {lab}:** {p_cover*100:.1f}%")
+
+# --- Visualization
+st.markdown("### 🔭 Visualization")
+fig = px.bar(
+    x=[f"{sel_team}", f"{opp}"],
+    y=[disp_team, disp_opp],
+    title=f"Projected Score – Week {sel_week}: {sel_team} vs {opp}",
+    labels={"x":"Team","y":"Points"}
+)
+st.plotly_chart(fig, use_container_width=True)
+
+# --- Debug (optional)
+with st.expander("Model details / calibration debug"):
+    st.write(f"Raw model: team={raw_team_pts:.2f}, opp={raw_opp_pts:.2f}, total={raw_total:.2f}, spread={raw_spread:.2f}")
+    st.write(f"Calibration: total = {a_tot:+.2f} + {b_tot:.3f}·raw (σ≈{sigma_tot:.2f})")
+    st.write(f"Calibration: spread = {a_spr:+.2f} + {b_spr:.3f}·raw (σ≈{sigma_spr:.2f})")
