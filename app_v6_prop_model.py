@@ -15,7 +15,7 @@ page = st.sidebar.radio(
     ["🏈 Player Prop Model", "📈 NFL Game Predictor"]
 )
 st.sidebar.markdown("---")
-st.sidebar.caption("NFL Data Model – v8.5 (Prop + Predictor Combined)")
+st.sidebar.caption("Biosense NFL Data Model – v8.6 (Prop + Predictor Combined)")
 
 # ======================================================
 # 🏈 TAB 1: FULL PLAYER PROP MODEL (v7.7)
@@ -92,7 +92,6 @@ if page == "🏈 Player Prop Model":
 
     st.header("📊 Results")
 
-    # === All Helper Functions (v7.7 logic) ===
     def find_player_in(df: pd.DataFrame, player_name: str):
         if "player" not in df.columns:
             return None
@@ -147,9 +146,7 @@ if page == "🏈 Player Prop Model":
                 return cols[i]
         return None
 
-    # === Compute Props ===
     for prop in selected_props:
-        # --- ANYTIME TD (Rushing + Receiving Combined) ---
         if prop == "anytime_td":
             st.subheader("🔥 Anytime TD (Rushing + Receiving + Defense Adjusted)")
             rec_row = find_player_in(p_rec, player_name)
@@ -188,7 +185,7 @@ if page == "🏈 Player Prop Model":
             st.write(f"**Estimated Anytime TD Probability:** {prob_anytime*100:.1f}%")
             continue
 
-        # --- OTHER PROPS ---
+        # --- Other Props ---
         if prop in ["receiving_yards", "receptions", "targets"]:
             player_df = find_player_in(p_rec, player_name)
             fallback_pos = "wr"
@@ -201,17 +198,21 @@ if page == "🏈 Player Prop Model":
         else:
             player_df = find_player_in(p_rec, player_name) or find_player_in(p_rush, player_name) or find_player_in(p_pass, player_name)
             fallback_pos = "wr"
+
         if player_df is None or player_df.empty:
             st.warning(f"❗ {prop}: player '{player_name}' not found.")
             continue
+
         player_pos = player_df.iloc[0].get("position", fallback_pos)
         stat_col = detect_stat_col(player_df, prop)
         if not stat_col:
             st.warning(f"⚠️ For {prop}, no matching stat column found.")
             continue
+
         season_val = float(player_df.iloc[0][stat_col])
         games_played = float(player_df.iloc[0].get("games_played", 1)) or 1.0
         player_pg = season_val / games_played
+
         def_df = pick_def_df(prop, player_pos)
         def_col = detect_def_col(def_df, prop) if def_df is not None else None
         opp_allowed_pg = None
@@ -229,6 +230,7 @@ if page == "🏈 Player Prop Model":
                     opp_allowed_pg = float(opp_row.iloc[0][def_col])
             else:
                 opp_allowed_pg = league_allowed_pg
+
         adj_factor = opp_allowed_pg / league_allowed_pg if league_allowed_pg and league_allowed_pg > 0 else 1.0
         predicted_pg = player_pg * adj_factor
         line_val = lines.get(prop, 0.0)
@@ -238,11 +240,13 @@ if page == "🏈 Player Prop Model":
         prob_under = norm.cdf(z)
         prob_over = float(np.clip(prob_over, 0.001, 0.999))
         prob_under = float(np.clip(prob_under, 0.001, 0.999))
+
         st.subheader(prop.replace("_", " ").title())
         st.write(f"**Adjusted prediction (this game):** {predicted_pg:.2f}")
         st.write(f"**Line:** {line_val}")
         st.write(f"**Probability of OVER:** {prob_over*100:.1f}%")
         st.write(f"**Probability of UNDER:** {prob_under*100:.1f}%")
+
         fig_bar = px.bar(x=["Predicted (this game)", "Line"], y=[predicted_pg, line_val],
                          title=f"{player_name} – {prop.replace('_', ' ').title()}")
         st.plotly_chart(fig_bar, use_container_width=True)
@@ -301,7 +305,6 @@ elif page == "📈 NFL Game Predictor":
         raw_team_pts = (team_avg_scored + opp_avg_allowed) / 2
         raw_opp_pts = (opp_avg_scored + team_avg_allowed) / 2
 
-        # Calibrate toward league average ~22.3 pts/team
         league_avg_pts = scores_df[["home_score", "away_score"]].stack().mean()
         cal_factor = 22.3 / league_avg_pts if not np.isnan(league_avg_pts) and league_avg_pts > 0 else 1.0
         raw_team_pts *= cal_factor
@@ -313,12 +316,16 @@ elif page == "📈 NFL Game Predictor":
         total_diff = total_pred - over_under
         spread_diff = margin - (-spread)
 
-        st.markdown(f"""
-        ### 🧮 Vegas-Calibrated Projection
-        **Predicted Score:**  
-        {selected_team}: **{raw_team_pts:.1f}**  
-        {opponent}: **{raw_opp_pts:.1f}**
+        st.markdown(
+            f"""
+            ### 🧮 Vegas-Calibrated Projection
+            **Predicted Score:**  
+            {selected_team}: **{raw_team_pts:.1f}**  
+            {opponent}: **{raw_opp_pts:.1f}**
 
-        **Predicted Total:** {total_pred:.1f}  
-        **Vegas O/U:** {over_under:.1f}  
-        **→ Lean:** {"Over
+            **Predicted Total:** {total_pred:.1f}  
+            **Vegas O/U:** {over_under:.1f}  
+            **→ Lean:** {"Over" if total_diff > 0 else "Under"} ({abs(total_diff):.1f} pts)
+
+            **Spread Line:** {spread:+.1f}  
+            **→ Lean:** {selected_team
