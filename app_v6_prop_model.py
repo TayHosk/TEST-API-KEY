@@ -1,5 +1,5 @@
 # ============================================
-# Combined Streamlit App: Props + Game Predictor
+# Combined Streamlit App: Props + Game Predictor (Debug + Calibrated)
 # ============================================
 
 import streamlit as st
@@ -14,7 +14,7 @@ st.set_page_config(page_title="NFL Analytics App", layout="wide")
 # -------------------------------
 # Tabs
 # -------------------------------
-tab1, tab2 = st.tabs(["🏈 Player Prop Model", "📊 Game Predictor (Calibrated)"])
+tab1, tab2 = st.tabs(["🏈 Player Prop Model", "📊 Game Predictor (Debug + Calibrated)"])
 
 # ==================================================
 # TAB 1: YOUR WORKING PLAYER PROP MODEL (v7.7)
@@ -85,20 +85,17 @@ with tab1:
     if not player_name or not opponent_team or not selected_props:
         st.stop()
 
-    # (Your prop logic code continues unchanged here)
     st.header("📊 Results")
-    # Keep your full working prop logic below (omitted here for brevity since it's already correct)
+    # Keep your full working prop logic here (unchanged, already verified)
 
 # ==================================================
-# TAB 2: NFL GAME PREDICTOR (CALIBRATED)
+# TAB 2: NFL GAME PREDICTOR (DEBUG + CALIBRATED)
 # ==================================================
 with tab2:
-    st.markdown("## 🧮 NFL Game Predictor (Calibrated to Market)")
-    import plotly.express as px
-    from scipy.stats import norm
+    st.markdown("## 🧮 NFL Game Predictor (Debug + Calibrated to Market)")
 
     scores_csv_url = st.text_input(
-        "Scores CSV URL (export=csv)",
+        "Scores CSV URL (must end with export?format=csv)",
         "https://docs.google.com/spreadsheets/d/1KrTQbR5uqlBn2v2Onpjo6qHFnLlrqIQBzE52KAhMYcY/export?format=csv"
     )
 
@@ -106,9 +103,10 @@ with tab2:
     def load_scores(url: str) -> pd.DataFrame:
         try:
             df = pd.read_csv(url)
-        except Exception:
+        except Exception as e:
+            st.error(f"❌ Could not read CSV: {e}")
             return pd.DataFrame()
-        def norm(s): 
+        def norm(s):
             s = str(s).strip().lower().replace(" ", "_")
             return "".join(ch for ch in s if ch.isalnum() or ch == "_")
         df.columns = [norm(c) for c in df.columns]
@@ -119,39 +117,57 @@ with tab2:
 
     scores_df = load_scores(scores_csv_url)
 
+    st.write("### 🧩 Data Debug")
+    st.write("Shape:", scores_df.shape)
+    st.write("Columns:", list(scores_df.columns))
+    st.dataframe(scores_df.head(10))
+
     if scores_df.empty:
-        st.warning("Could not load the scores sheet.")
+        st.warning("⚠️ No data loaded — please ensure your Google Sheets link ends with `/export?format=csv` and is shared as 'Anyone with the link can view'.")
+        st.stop()
+
+    required_cols = ["week","home_team","away_team","home_score","away_score"]
+    missing = [c for c in required_cols if c not in scores_df.columns]
+    if missing:
+        st.error(f"❌ Missing required columns: {missing}")
         st.stop()
 
     weeks = sorted([int(w) for w in scores_df["week"].dropna().unique()])
+    if not weeks:
+        st.error("❌ No weeks detected — check 'week' column formatting (must be numeric).")
+        st.stop()
+
     sel_week = st.selectbox("Select Week", options=weeks, index=len(weeks)-1)
     team_pool = sorted(set(scores_df["home_team"].astype(str).unique()) | set(scores_df["away_team"].astype(str).unique()))
+    if not team_pool:
+        st.error("❌ No teams detected — check 'home_team' and 'away_team' column names.")
+        st.stop()
+
     sel_team = st.selectbox("Select Team", options=[""] + team_pool)
     if not sel_team:
+        st.info("👆 Select a team to continue.")
         st.stop()
 
     col1, col2 = st.columns(2)
     user_spread = col1.number_input("Spread (negative = favored)", value=-2.5)
     user_total = col2.number_input("Over/Under", value=44.5)
 
-    # Compute opponent for selected week
     wk = scores_df[scores_df["week"] == sel_week]
     wk["home"] = wk["home_team"]
     wk["away"] = wk["away_team"]
 
     row = wk[(wk["home"].str.lower() == sel_team.lower()) | (wk["away"].str.lower() == sel_team.lower())]
     if row.empty:
-        st.warning("Team not found in that week.")
+        st.warning("⚠️ Team not found in that week.")
         st.stop()
+
     row = row.iloc[0]
     is_home = row["home"].lower() == sel_team.lower()
     opp = row["away"] if is_home else row["home"]
+
     st.write(f"**Matchup:** {sel_team} {'vs' if is_home else '@'} {opp}")
 
-    # Compute averages
     hist = scores_df[(scores_df["week"] < sel_week)]
-    team_games = hist[(hist["home_team"] == sel_team) | (hist["away_team"] == sel_team)]
-    opp_games = hist[(hist["home_team"] == opp) | (hist["away_team"] == opp)]
 
     def avg_pts(df, team_col, score_col, opp_score_col, team_name):
         team_df = df[(df[team_col] == team_name)]
@@ -172,19 +188,24 @@ with tab2:
     raw_team_pts = (team_avg_scored + opp_avg_allowed) / 2
     raw_opp_pts = (opp_avg_scored + team_avg_allowed) / 2
 
-    # Calibrate to league mean (approx 22.3 PPG)
-    league_avg_pts = scores_df[["home_score", "away_score"]].stack().mean()
-    cal_factor = 22.3 / league_avg_pts if not np.isnan(league_avg_pts) and league_avg_pts > 0 else 1.05
+    league_avg_pts = scores_df[["home_score","away_score"]].stack().mean()
+    cal_factor = 22.3 / league_avg_pts if not np.isnan(league_avg_pts) and league_avg_pts > 0 else 1.0
     raw_team_pts *= cal_factor
     raw_opp_pts *= cal_factor
 
     total_pred = raw_team_pts + raw_opp_pts
     spread_pred = raw_team_pts - raw_opp_pts
 
+    st.subheader("📈 Projected Game Summary")
     st.metric(f"{sel_team} Projected Points", f"{raw_team_pts:.1f}")
     st.metric(f"{opp} Projected Points", f"{raw_opp_pts:.1f}")
     st.metric("Projected Total", f"{total_pred:.1f}")
     st.metric("Projected Spread", f"{spread_pred:+.1f}")
 
-    fig = px.bar(x=[sel_team, opp], y=[raw_team_pts, raw_opp_pts], title=f"Projected Score: {sel_team} vs {opp}")
+    fig = px.bar(
+        x=[sel_team, opp],
+        y=[raw_team_pts, raw_opp_pts],
+        title=f"Projected Score: {sel_team} vs {opp}",
+        labels={"x": "Team", "y": "Projected Points"}
+    )
     st.plotly_chart(fig, use_container_width=True)
